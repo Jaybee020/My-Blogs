@@ -1,0 +1,28 @@
+languageCode = "en"
+languageName = "English"
+displayName = "EN"
+isoCode = "en"
+weight = 1
+rtl = false
+
+title = "Congo"
+# description = "My awesome website"
+# copyright = "Copy, _right?_ :thinking_face:"
+
+dateFormat = "2 January 2006"
+
+[params]
+  # mainSections = ["section1", "section2"]
+
+[author]
+   name = "Ganiyu Olayinka"
+   image = "img/zggv79.jpg"
+   headline = "From smart contracts to scalable servers, I try to create secure and efficient solutions for the blockchain era"
+   bio = "A self-taught developer that strives to build scalable and efficient backend systems for the modern web, focusing on leveraging blockchain technologies to create decentralized solutions."
+
+   links = [
+    { email = "mailto:olayinkaganiyu1@gmail.com" },
+     { discord = "https://discord.com/users/910801228869562409" },
+     { github = "https://github.com/Jaybee020" },
+     { linkedin = "https://www.linkedin.com/in/ganiyu-olayinka-0574b6170/" },
+   ]
