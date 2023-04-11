@@ -1,7 +1,6 @@
 ---
 title: "Creating a Decentralized Lottery Game Contract on the Algorand Blockchain"
 date: 2023-04-06T16:25:40+01:00
-draft: true
 description: "RandNum, a guess the number lottery game"
 topics: ["Algorand", "Lottery", "Blockchain"]
 ---

@@ -1,7 +1,6 @@
 ---
 title: "Creating a Server Interacting with the Lottery Contract"
 date: 2023-04-06T16:25:40+01:00
-draft: true
 ---
 
 Previously,we discussed the lottery contract of [Randnum]("url") in the [previous article]({{< ref "randnum-contract" >}}).We are now ready to describe a server that interacts with the lottery contract, that uses the Algorand Javascript SDK and Indexer to track transactions sent to the smart contract.
