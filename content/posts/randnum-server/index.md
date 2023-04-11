@@ -4,8 +4,7 @@ date: 2023-04-06T16:25:40+01:00
 draft: true
 ---
 
-Previously,we discussed the lottery contract of [Randnum]("url") in the [previous article]("url")
-We are now ready to describe a server that interacts with the lottery contract, that uses the Algorand Javascript SDK and Indexer to track transactions sent to the smart contract.
+Previously,we discussed the lottery contract of [Randnum]("url") in the [previous article]({{< ref "randnum-contract" >}}).We are now ready to describe a server that interacts with the lottery contract, that uses the Algorand Javascript SDK and Indexer to track transactions sent to the smart contract.
 
 ## The Express Server
 
@@ -65,7 +64,7 @@ export const LottoModel = model<Lotto, LottoModel>("LottoModel", LottoSchema);
 
 ### Decoder
 
-The decoder is used to decode the methods called by players after the transactions have been fetched via the Algorand Indexer.
+The decoder is used to decode a player's application calls fetched via the Algorand Indexer.This involves hardcoding each method signature and method name into separate arrays. The decoding process simply involves getting the index of the method signature from the encoded array and returning the data in that particular index of the decoded methods array.
 
 ```js
 import { ABIMethod } from "algosdk";
@@ -217,58 +216,137 @@ export class LottoGameArgsDecoder {
 
 ### Utility Functions
 
-The functions below are utility functions used by our server. The functions involve using the Algorand Indexer to fetch interactions between an address and the lottery contract,filtering these transactions by the note value,sending algos,getting the log data from a transaction using its hash among others. They can be studied in the github repo
+The functions below are utility functions used by our server. The functions involve using the Algorand Indexer to fetch interactions between an address and the lottery contract,filtering these transactions by the note value,sending algos,getting the log data from a transaction using its hash among others. They can be studied in the github repo.
 
 ### LottoCall Functions
 
-These functions are used to create transactions that interact with the lottery smart contract. It uses the atomic transaction composer for most methods while methods that require player's actions are returned as transactions to be signed by the frontend(enterCurrentGame,changeCurrentGameNumber)
+These functions create transactions that interact with the lottery smart contract. It uses the atomic transaction composer for most methods, while methods that require the player's action are returned as transactions to be signed by the player.
+
+This function calculates the minimum amount of algo to be sent to the lottery contract to initialize a new lottery round.
 
 ```js
-import {
-  encodeUint64,
-  getApplicationAddress,
-  makeApplicationNoOpTxn,
-  makeBasicAccountTransactionSigner,
-  makeApplicationOptInTxn,
-  Transaction,
-  ABIContract,
-  AtomicTransactionComposer,
-  ABIMethod,
-  Account,
-  OnApplicationComplete,
-  makePaymentTxnWithSuggestedParamsFromObject,
-  assignGroupID,
-  ALGORAND_MIN_TX_FEE,
-  decodeAddress,
-} from "algosdk";
-import { appAddr, appId, randomnessBeaconContract, user } from "./config";
-import { algoIndexer, checkUserOptedIn, getMethodByName } from "./utils";
-// import { appId, user } from "./config";
-import { algodClient, submitTransaction } from "./utils";
+export async function getMinAmountToStartGame(
+  ticketFee: number,
+  win_multiplier: number,
+  max_players_allowed: number | bigint
+) {
+  const appAccountInfo = await algodClient.accountInformation(appAddr).do();
+  const appSpendableBalance =
+    appAccountInfo.amount - appAccountInfo["min-balance"];
 
-async function OptIn(user: Account, appId: number) {
-  let txId: string;
-  let txn;
-
-  // get transaction params
-  const params = await algodClient.getTransactionParams().do();
-
-  // deposit
-  //@ts-ignore
-  const enc = new TextEncoder();
-  const depositAmount = 1e6; // 1 ALGO
-
-  // create and send OptIn
-  txn = makeApplicationOptInTxn(user.addr, params, appId);
-  txId = await submitTransaction(txn, user.sk);
-
-  // display results
-  let transactionResponse = await algodClient
-    .pendingTransactionInformation(txId)
-    .do();
-  console.log("Opted-in to app-id:", transactionResponse["txn"]["txn"]["apid"]);
+  return (
+    (BigInt(win_multiplier) - BigInt(1)) *
+      BigInt(max_players_allowed) *
+      BigInt(ticketFee) -
+    BigInt(appSpendableBalance)
+  );
 }
+```
 
+The **initializeGameParams** function creates a new game on the lottery contract. The inputs to this method are the necessary game parameters.It constructs an atomic transaction that consists of the payment transaction to fund the contract for a new lottery round and the method call to create a new round. It assigns a group id to the transactions and returns the grouped transactions to the gameMaster to sign and publish to the network.
+
+```js
+export async function initializeGameParams(
+  gameMasterAddr: string,
+  ticketingStart: number | bigint,
+  ticketingDuration: number,
+  ticketFee: number,
+  win_multiplier: number,
+  max_guess_number: number | bigint,
+  max_players_allowed: number | bigint,
+  lotteryContractAddr: string,
+  withdrawalStart: number | bigint
+) {
+  try {
+    const params = await algodClient.getTransactionParams().do();
+    const minAmountToTransfer = await getMinAmountToStartGame(
+      ticketFee,
+      win_multiplier,
+      max_players_allowed
+    );
+    const enc = new TextEncoder();
+    const newGameTxn = makePaymentTxnWithSuggestedParamsFromObject({
+      suggestedParams: params,
+      from: gameMasterAddr,
+      to: appAddr,
+      amount: minAmountToTransfer == BigInt(0) ? 1 : minAmountToTransfer,
+      note: enc.encode("init_game"), //for decoding when trying to do profile(exclude init game txns)
+    });
+    const abi = new ABIMethod({
+      name: "initiliaze_game_params",
+      args: [
+        {
+          type: "uint64",
+          name: "ticketing_start",
+        },
+        {
+          type: "uint64",
+          name: "ticketing_duration",
+        },
+        {
+          type: "uint64",
+          name: "ticket_fee",
+        },
+        {
+          type: "uint64",
+          name: "withdrawal_start",
+        },
+        {
+          type: "uint64",
+          name: "win_multiplier",
+        },
+        {
+          type: "uint64",
+          name: "max_guess_number",
+        },
+        {
+          type: "uint64",
+          name: "max_players_allowed",
+        },
+        {
+          type: "account",
+          name: "lottery_account",
+        },
+        {
+          type: "pay",
+          name: "create_txn",
+        },
+      ],
+      returns: {
+        type: "void",
+      },
+    });
+    var applCallTxn = makeApplicationNoOpTxn(
+      gameMasterAddr,
+      params,
+      appId,
+      [
+        abi.getSelector(),
+        encodeUint64(ticketingStart),
+        encodeUint64(ticketingDuration),
+        encodeUint64(ticketFee),
+        encodeUint64(withdrawalStart),
+        encodeUint64(win_multiplier),
+        encodeUint64(max_guess_number),
+        encodeUint64(max_players_allowed),
+        encodeUint64(1).subarray(7, 8),
+      ],
+      [lotteryContractAddr]
+    );
+    return {
+      status: true,
+      txns: assignGroupID([newGameTxn, applCallTxn]),
+    };
+  } catch (error) {
+    console.log(error);
+    return { status: false };
+  }
+}
+```
+
+The **enterCurrentGame** function accepts inputs of the player's address, the player's guess number, and the ticket fee for the current lottery round. This method creates an atomic transaction consisting of the ticket fee payment as a payment transaction and a method call to the lottery contract address. It assigns a group id to these transactions and returns the array of transactions to be signed by the player.
+
+```js
 export async function enterCurrentGame(
   playerAddr: string,
   guessNumber: number,
@@ -282,7 +360,7 @@ export async function enterCurrentGame(
     from: playerAddr,
     to: appAddr,
     amount: ticketFee,
-    note: enc.encode("enter_game"),//txn note as specified by the contract
+    note: enc.encode("enter_game"), //txn note as specified by the contract
   });
   const abi = new ABIMethod({
     name: "enter_game",
@@ -313,7 +391,11 @@ export async function enterCurrentGame(
   }
   return assignGroupID([ticketTXn, applCallTxn]);
 }
+```
 
+The **changeGuessNumber** is used to modify the choie of a player's guess number. It creates an application call transaction with the input as the new guess number for the player to sign.
+
+```js
 export async function changeCurrentGameNumber(
   playerAddr: string,
   newGuessNumber: number
@@ -339,7 +421,11 @@ export async function changeCurrentGameNumber(
   ]);
   return [applCallTxn];
 }
+```
 
+The rest of the method calls are made using the atomic transaction composer. This is because they are made by the server and do not neccessarily need to be signed by the user(as the server signs them already).
+
+```js
 export async function call(
   user: Account,
   appId: number,
@@ -468,119 +554,8 @@ export async function getGeneratedLuckyNumber() {
   }
 }
 
-export async function getMinAmountToStartGame(
-  ticketFee: number,
-  win_multiplier: number,
-  max_players_allowed: number | bigint
-) {
-  const appAccountInfo = await algodClient.accountInformation(appAddr).do();
-  const appSpendableBalance =
-    appAccountInfo.amount - appAccountInfo["min-balance"];
 
-  return (
-    (BigInt(win_multiplier) - BigInt(1)) *
-      BigInt(max_players_allowed) *
-      BigInt(ticketFee) -
-    BigInt(appSpendableBalance)
-  );
-}
 
-export async function initializeGameParams(
-  gameMasterAddr: string,
-  ticketingStart: number | bigint,
-  ticketingDuration: number,
-  ticketFee: number,
-  win_multiplier: number,
-  max_guess_number: number | bigint,
-  max_players_allowed: number | bigint,
-  lotteryContractAddr: string,
-  withdrawalStart: number | bigint
-) {
-  try {
-    const params = await algodClient.getTransactionParams().do();
-    const minAmountToTransfer = await getMinAmountToStartGame(
-      ticketFee,
-      win_multiplier,
-      max_players_allowed
-    );
-    const enc = new TextEncoder();
-    const newGameTxn = makePaymentTxnWithSuggestedParamsFromObject({
-      suggestedParams: params,
-      from: gameMasterAddr,
-      to: appAddr,
-      amount: minAmountToTransfer == BigInt(0) ? 1 : minAmountToTransfer,
-      note: enc.encode("init_game"), //for decoding when trying to do profile(exclude init game txns)
-    });
-    const abi = new ABIMethod({
-      name: "initiliaze_game_params",
-      args: [
-        {
-          type: "uint64",
-          name: "ticketing_start",
-        },
-        {
-          type: "uint64",
-          name: "ticketing_duration",
-        },
-        {
-          type: "uint64",
-          name: "ticket_fee",
-        },
-        {
-          type: "uint64",
-          name: "withdrawal_start",
-        },
-        {
-          type: "uint64",
-          name: "win_multiplier",
-        },
-        {
-          type: "uint64",
-          name: "max_guess_number",
-        },
-        {
-          type: "uint64",
-          name: "max_players_allowed",
-        },
-        {
-          type: "account",
-          name: "lottery_account",
-        },
-        {
-          type: "pay",
-          name: "create_txn",
-        },
-      ],
-      returns: {
-        type: "void",
-      },
-    });
-    var applCallTxn = makeApplicationNoOpTxn(
-      gameMasterAddr,
-      params,
-      appId,
-      [
-        abi.getSelector(),
-        encodeUint64(ticketingStart),
-        encodeUint64(ticketingDuration),
-        encodeUint64(ticketFee),
-        encodeUint64(withdrawalStart),
-        encodeUint64(win_multiplier),
-        encodeUint64(max_guess_number),
-        encodeUint64(max_players_allowed),
-        encodeUint64(1).subarray(7, 8),
-      ],
-      [lotteryContractAddr]
-    );
-    return {
-      status: true,
-      txns: assignGroupID([newGameTxn, applCallTxn]),
-    };
-  } catch (error) {
-    console.log(error);
-    return { status: false };
-  }
-}
 
 export async function resetGameParams(
   lotteryContractAddr: string,
@@ -611,51 +586,20 @@ export async function resetGameParams(
 
 These functions are called by our server for its several routes. They call the several methods in the lottery smart contract.
 
-```js
-import {
-  decodeAddress,
-  decodeUint64,
-  encodeAddress,
-  waitForConfirmation,
-} from "algosdk";
-import { appAddr, appId, initRedis, user } from "../scripts/config";
-import { LottoGameArgsDecoder } from "../scripts/decode";
-import {
-  changeCurrentGameNumber,
-  checkUserWinLottery,
-  generateRandomNumber,
-  getGameParams,
-  getGeneratedLuckyNumber,
-  getUserGuessNumber,
-  initializeGameParams,
-  resetGameParams,
-} from "../scripts/lottoCall";
-import {
-  algodClient,
-  getAppCallTransactionsBetweenRounds,
-  getAppCallTransactionsFromRound,
-  getAppEnterGameTransactions,
-  getAppEnterGameTransactionsBetweenRounds,
-  getAppEnterGameTransactionsFromRound,
-  getAppPayTransactions,
-  getAppPayTransactionsBetweenRounds,
-  getAppPayTransactionsFromRound,
-  getAppPayWinnerTransactions,
-  getAppPayWinnerTransactionsBetweenRounds,
-  getTransactionReference,
-  getUserTransactionstoApp,
-  getUserTransactionstoAppBetweenRounds,
-  sleep,
-} from "../scripts/utils";
-import { GameParams, LottoModel } from "./models/lottoHistory";
+First, we define the needed interfaces to ensure type safety.
 
+1. The **UserBetDetailValue** is a structure used to define a player's interaction with the lottery contract for a particular game round. It contains the player's address, the transaction id for that transaction, the decoded action or method call for that transaction, the value passed as input for the method call, and the confirmation round of the transaction
+2. The **UserBetDetail** indexes a player's interactions by lottoId. It is an object whose key is the round of the game played and the value is the userBetDetailValue for that round.
+3. The **Transaction** interface is a structure for transactions fetched using the algod indexer API.
+
+```js
 interface UserBetDetailValue {
   userInteractions: {
-    userAddr: string;
-    action: string | null;
-    value: any;
-    round: number;
-    txId: string;
+    userAddr: string,
+    action: string | null,
+    value: any,
+    round: number,
+    txId: string,
   }[];
   lottoParams?: GameParams;
   id?: string;
@@ -671,14 +615,18 @@ interface Transaction {
   group?: string;
   "confirmed-round": number;
   "application-transaction": {
-    "application-args": string[];
-    accounts: string[];
+    "application-args": string[],
+    accounts: string[],
   };
   "payment-transaction": {
-    receiver: string;
+    receiver: string,
   };
 }
+```
 
+The **parseLottoTxn** helps to extract necessary information from a list of the user's application call transactions to the lottery contract. This is achieved by decoding the method signature and the method arguments in the application arguments.
+
+```js
 function parseLottoTxn(userTxns: Transaction[]) {
   const decoder = new LottoGameArgsDecoder();
   const filteredAndParsed = userTxns
@@ -731,7 +679,11 @@ function parseLottoTxn(userTxns: Transaction[]) {
 
   return filteredAndParsed;
 }
+```
 
+The **getUserLottoHistory** and **getUserLottoHistoryByLottoId** is used to get the interactions of the input user address. The getUserLottoHistory fetches this interaction across all games played on the contract. The getUserLottoHistoryByLottoId takes in an extra lottoId parameter that signifies the lottery round we want to fetch the interactions for.This is achieved by querying the database for the starting and ending rounds for that particular transaction round and filtering for interactions between that round
+
+```js
 export async function getUserLottoHistory(
   userAddr: string
 ): Promise<UserBetDetail> {
@@ -809,7 +761,11 @@ export async function getUserHistoryByLottoId(
     return {};
   }
 }
+```
 
+The **getLottoCallsById** works similar to the **getUserLottoHistoryByLottoId**. The major difference is that it does not take in a user address and instead fetches for all user interactions for that particular lottery round.
+
+```js
 export async function getLottoCallsById(lottoId: number) {
   try {
     const betHistoryDetails = await LottoModel.findOne({ lottoId: lottoId });
@@ -843,7 +799,11 @@ export async function getLottoCallsById(lottoId: number) {
     return [];
   }
 }
+```
 
+The **getLottoPayTxnById** and **getLottoPayTxn** are used to fetch ticket fee transactions and winner payment transactions for the corresponding game round and all game rounds respectively.
+
+```js
 export async function getLottoPayTxnById(lottoId: number) {
   try {
     const betHistoryDetails = await LottoModel.findOne({ lottoId: lottoId });
@@ -881,25 +841,11 @@ export async function getLottoPayTxn() {
     return { receivedTxns: [], sentTxns: [] };
   }
 }
+```
 
-export async function getPlayerCurrentGuessNumber(userAddr: string) {
-  const result = await getUserGuessNumber(userAddr);
-  return result;
-}
+**generateLuckyNumber** function simply checks if the condition to generate the lucky numbers are met before calling the **generateRandomNumber** method.
 
-export async function getPlayerChangeGuessNumber(
-  userAddr: string,
-  newGuessNumber: number
-) {
-  const result = await changeCurrentGameNumber(userAddr, newGuessNumber);
-  return result;
-}
-
-export async function getCurrentGeneratedNumber() {
-  const result = await getGeneratedLuckyNumber();
-  return result;
-}
-
+```js
 export async function generateLuckyNumber() {
   const gameParams = await getCurrentGameParam();
 
@@ -917,7 +863,11 @@ export async function generateLuckyNumber() {
     return { status: false };
   }
 }
+```
 
+The **getCurrentGameParam** simply fetches the current game parameters and returns it as an object instead of an array.
+
+```js
 export async function getCurrentGameParam() {
   const data = await getGameParams();
   const gameParams: GameParams = {
@@ -960,22 +910,11 @@ export async function getCurrentGameParam() {
   );
   return gameParams;
 }
+```
 
-export async function getGameParamsById(lottoId: number) {
-  const betHistoryDetails = await LottoModel.findOne({ lottoId: lottoId });
-  return betHistoryDetails;
-}
+The **endCurrentAndCreateNewGame** ends the current game played on the contract and creates a new one. It ensures that we are in the right conditions to end the game played before starting a new game. It also updates the database for every new game to keep track of historical data on the contract. It takes in the necessary game parameters as inputs(or uses the default values specified if they are absent) and returns transactions to be signed by the game Master.
 
-export async function decodeTxReference(txId: string) {
-  const data = await getTransactionReference(txId);
-  return data;
-}
-
-export async function checkPlayerWinStatus(playerAddr: string) {
-  const data = await checkUserWinLottery(playerAddr);
-  return data;
-}
-
+```js
 export async function endCurrentAndCreateNewGame(
   ticketingStart = Math.round(Date.now() / 1000 + 200),
   ticketingDuration = 3600,
@@ -1093,7 +1032,11 @@ export async function endCurrentAndCreateNewGame(
 
   return { newLottoDetails: newLotto, newGame: success };
 }
+```
 
+The **checkAllPlayersWin** method is used to check the winning status of every player that participated in the current lottery game round. It ensures we are in the withdrawal phase of the lottery game and then fetches every player that interacted with the lottery contract between the starting and ending rounds of the current lottery game round. It then proceeds to check the winning status of unchecked addresses.
+
+```js
 export async function checkAllPlayersWin() {
   try {
     const gameParams = await getCurrentGameParam();
@@ -1143,11 +1086,11 @@ export async function checkAllPlayersWin() {
 
 ### Server Routers
 
-The endpoints exposed by the server that responds to requests made is discussed in the repo's server readme
+The endpoints exposed by the server that responds to requests made is discussed in the repo's server readme.
 
 ### Server Workers
 
-There are multiple workers running in the background of the server. They help to run certain functions incase there is not any client to run them. This simply means that the server just simply acts as an open relayer that calls certain methods. These methods include
+There are multiple workers running in the background of the server via cronjobs. They help to run certain functions incase there is not any client to run them. This simply means that the server just simply acts as an open relayer that calls certain methods. These methods include
 
 1. Generating a new game
 2. Generating the lucky number
