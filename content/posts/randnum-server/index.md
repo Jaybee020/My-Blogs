@@ -268,7 +268,7 @@ export async function initializeGameParams(
       suggestedParams: params,
       from: gameMasterAddr,
       to: appAddr,
-      amount: minAmountToTransfer == BigInt(0) ? 1 : minAmountToTransfer,
+      amount: minAmountToTransfer <= BigInt(1e6) ? 1e6 : minAmountToTransfer,,
       note: enc.encode("init_game"), //for decoding when trying to do profile(exclude init game txns)
     });
     const abi = new ABIMethod({
