@@ -9,6 +9,7 @@ theme = "congo"
 enableRobotsTXT = true
 paginate = 10
 summaryLength = 0
+googleAnalytics = "G-WW7L24XYKM"
 
 [outputs]
   home = ["HTML", "RSS", "JSON"]
